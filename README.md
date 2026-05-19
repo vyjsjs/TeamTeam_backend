@@ -61,7 +61,6 @@ docker compose up --build
 |--------|------|------|
 | `SUPABASE_URL` | Supabase 프로젝트 URL | ✅ |
 | `SUPABASE_KEY` | Supabase anon key | ✅ |
-| `JWT_SECRET_KEY` | JWT 시크릿 키 | ✅ |
 | `GEMINI_API_KEY` | Gemini API 키 (AI 기능용) | ❌ |
 | `CORS_ORIGINS` | 허용 오리진 (쉼표 구분) | ❌ |
 

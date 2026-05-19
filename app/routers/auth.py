@@ -50,7 +50,7 @@ async def signup(body: SignUpRequest):
 
 @router.post("/login", response_model=TokenResponse)
 async def login(body: LoginRequest):
-    """로그인 — 이메일과 비밀번호로 인증 후 JWT 토큰 발급."""
+    """로그인 — 이메일과 비밀번호로 인증 후 토큰 발급."""
     db = get_supabase()
 
     result = db.table("user").select("*").eq("email", body.email).execute()

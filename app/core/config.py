@@ -10,10 +10,6 @@ class Settings(BaseSettings):
     SUPABASE_KEY: str  # anon key (publishable)
     SUPABASE_SERVICE_KEY: str = ""  # service role key (optional, for admin ops)
 
-    # JWT
-    JWT_SECRET_KEY: str = "teamteam-secret-key-change-in-production"
-    JWT_ALGORITHM: str = "HS256"
-    JWT_ACCESS_TOKEN_EXPIRE_MINUTES: int = 60 * 24  # 24 hours
 
     # Gemini (for AI schedule recommendations & chat summary)
     GEMINI_API_KEY: str = ""

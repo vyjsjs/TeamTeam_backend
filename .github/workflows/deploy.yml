@@ -1,0 +1,43 @@
+name: Deploy to EC2
+
+on:
+  push:
+    branches: [ "main", "master" ]
+  workflow_dispatch: # GitHub 웹에서 수동으로 실행할 수 있는 옵션
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        
+      - name: Create .env file for deployment
+        run: |
+          echo "SUPABASE_URL=${{ secrets.SUPABASE_URL }}" >> .env
+          echo "SUPABASE_KEY=${{ secrets.SUPABASE_KEY }}" >> .env
+          echo "GEMINI_API_KEY=${{ secrets.GEMINI_API_KEY }}" >> .env
+          echo "CORS_ORIGINS=*" >> .env
+          
+      - name: Copy files via SSH
+        uses: appleboy/scp-action@v0.1.7
+        with:
+          host: ${{ secrets.EC2_HOST }}
+          username: ${{ secrets.EC2_USERNAME }}
+          key: ${{ secrets.EC2_SSH_KEY }}
+          source: "."
+          target: "/home/${{ secrets.EC2_USERNAME }}/TeamTeam_backend"
+          
+      - name: Execute deployment commands on EC2
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ secrets.EC2_HOST }}
+          username: ${{ secrets.EC2_USERNAME }}
+          key: ${{ secrets.EC2_SSH_KEY }}
+          script: |
+            cd /home/${{ secrets.EC2_USERNAME }}/TeamTeam_backend
+            # 디스크 공간 문제 방지를 위해 사용하지 않는 이미지 정리
+            docker system prune -af --volumes
+            # 도커 컨테이너 빌드 및 재실행
+            docker compose up --build -d

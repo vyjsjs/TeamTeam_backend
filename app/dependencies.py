@@ -11,7 +11,7 @@ security = HTTPBearer()
 async def get_current_user(
     credentials: HTTPAuthorizationCredentials = Depends(security),
 ) -> dict:
-    """Extract and validate the current user from the JWT token.
+    """Extract and validate the current user from the token.
 
     Returns the full user row from the database (minus password).
     """
