@@ -13,6 +13,10 @@ class Settings(BaseSettings):
 
     # Gemini (for AI schedule recommendations & chat summary)
     GEMINI_API_KEY: str = ""
+    
+    #보안키 
+    JWT_SECRET: str 
+    REFRESH_SECRET: str 
 
     # App
     APP_NAME: str = "TeamTeam Backend"
