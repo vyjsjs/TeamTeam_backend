@@ -8,6 +8,7 @@ import sys
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.requests import Request
 from starlette.responses import Response
+from app.core.metrics import http_errors_total
 
 # Configure structured logger
 logger = logging.getLogger("teamteam")
@@ -52,6 +53,8 @@ class RequestLoggingMiddleware(BaseHTTPMiddleware):
 
         latency_ms = round((time.time() - start_time) * 1000, 2)
 
+        user_id = getattr(request.state, "user_id", None)
+
         extra = {
             "request_id": request_id,
             "method": request.method,
@@ -60,12 +63,24 @@ class RequestLoggingMiddleware(BaseHTTPMiddleware):
             "latency_ms": latency_ms,
             "client_ip": request.client.host if request.client else None,
         }
+        if user_id is not None:
+            extra["user_id"] = user_id
 
         # Determine log level by status code
         if response.status_code >= 500:
             level = logging.ERROR
+            http_errors_total.labels(
+                endpoint=str(request.url.path),
+                status_code=str(response.status_code),
+                error_type="server_error",
+            ).inc()
         elif response.status_code >= 400:
             level = logging.WARNING
+            http_errors_total.labels(
+                endpoint=str(request.url.path),
+                status_code=str(response.status_code),
+                error_type="client_error",
+            ).inc()
         else:
             level = logging.INFO
 

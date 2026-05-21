@@ -2,6 +2,7 @@
 
 import json
 import logging
+import time
 from datetime import datetime, timezone
 from fastapi import APIRouter, Depends, HTTPException, status
 from app.dependencies import get_current_user
@@ -13,9 +14,18 @@ from app.schemas.ai_schedule import (
     AISessionResponse,
     AIConfirmRequest,
 )
+from app.core.metrics import (
+    ai_schedule_latency,
+    ai_schedule_failure_total,
+    ai_schedule_accept_total,
+    ai_schedule_reject_total,
+    ai_schedule_task_modify_total,
+)
 
 router = APIRouter(tags=["AI Schedule"])
 logger = logging.getLogger("teamteam")
+
+AI_SCHEDULE_WARN_THRESHOLD_S = 5.0
 
 
 def _verify_leader(db, team_id: int, user_id: int):
@@ -102,7 +112,9 @@ async def _call_openai_schedule(goal: str, deadline: str, tasks: list[str]) -> l
 
     except Exception as e:
         latency = (datetime.now(timezone.utc) - start_time).total_seconds()
-        logger.error(f"AI schedule API failed after {latency:.2f}s: {e}")
+        error_type = type(e).__name__
+        ai_schedule_failure_total.labels(error_type=error_type).inc()
+        logger.error(f"AI schedule API failed after {latency:.2f}s [{error_type}]: {e}")
         raise HTTPException(status_code=502, detail=f"AI 스케줄 생성에 실패했습니다: {str(e)}")
 
 
@@ -116,6 +128,7 @@ async def create_ai_session(
 
     최종 목표, 마감일, 할 일 리스트를 전달하면 AI가 일정을 추천합니다.
     """
+    endpoint_start = time.time()
     db = get_supabase()
     _verify_leader(db, team_id, current_user["id"])
 
@@ -149,6 +162,27 @@ async def create_ai_session(
         result = db.table("ai_schedule_task").insert(task_data).execute()
         if result.data:
             ai_tasks.append(AIScheduleTaskItem(**result.data[0]))
+
+    total_latency = time.time() - endpoint_start
+    ai_schedule_latency.observe(total_latency)
+
+    log_extra = {
+        "team_id": team_id,
+        "user_id": current_user["id"],
+        "session_id": session["id"],
+        "task_count": len(ai_tasks),
+        "total_latency_ms": round(total_latency * 1000, 2),
+    }
+    if total_latency > AI_SCHEDULE_WARN_THRESHOLD_S:
+        record = logger.makeRecord("teamteam", logging.WARNING, "", 0,
+            f"AI schedule recommendation slow: {total_latency:.2f}s", (), None)
+        record.extra_data = log_extra
+        logger.handle(record)
+    else:
+        record = logger.makeRecord("teamteam", logging.INFO, "", 0,
+            f"AI schedule recommendation completed: {total_latency:.2f}s", (), None)
+        record.extra_data = log_extra
+        logger.handle(record)
 
     return AISessionResponse(
         id=session["id"],
@@ -212,6 +246,28 @@ async def confirm_ai_session(
 
     _verify_leader(db, session.data["team_id"], current_user["id"])
 
+    # Compare with original AI recommendations to detect manual modifications
+    original_tasks = (
+        db.table("ai_schedule_task")
+        .select("task_name, start_date, due_date")
+        .eq("session_id", session_id)
+        .order("start_date")
+        .execute()
+    )
+    original_map = {t["task_name"]: t for t in (original_tasks.data or [])}
+    modify_count = 0
+    for item in body.tasks:
+        orig = original_map.get(item.task_name)
+        if orig:
+            due_str = item.due_date.isoformat() if item.due_date else None
+            if due_str != orig.get("due_date"):
+                modify_count += 1
+        else:
+            modify_count += 1  # task name itself changed
+
+    if modify_count > 0:
+        ai_schedule_task_modify_total.inc(modify_count)
+
     # Create tasks in the Task table
     created_count = 0
     for item in body.tasks:
@@ -226,7 +282,47 @@ async def confirm_ai_session(
     # Update session status to confirmed
     db.table("ai_schedule_session").update({"status": "confirmed"}).eq("id", session_id).execute()
 
+    ai_schedule_accept_total.inc()
+    record = logger.makeRecord("teamteam", logging.INFO, "", 0,
+        f"AI schedule accepted (session={session_id}, modified={modify_count}/{created_count})", (), None)
+    record.extra_data = {
+        "session_id": session_id,
+        "user_id": current_user["id"],
+        "tasks_created": created_count,
+        "tasks_modified": modify_count,
+    }
+    logger.handle(record)
+
     return {
         "message": f"{created_count}개의 업무가 등록되었습니다.",
         "tasks_created": created_count,
+        "tasks_modified": modify_count,
     }
+
+
+@router.post("/api/ai-sessions/{session_id}/reject", response_model=dict)
+async def reject_ai_session(
+    session_id: int,
+    current_user: dict = Depends(get_current_user),
+):
+    """AI 일정 추천 기각 — 팀장이 추천 결과를 사용하지 않기로 결정."""
+    db = get_supabase()
+
+    session = db.table("ai_schedule_session").select("*").eq("id", session_id).single().execute()
+    if not session.data:
+        raise HTTPException(status_code=404, detail="세션을 찾을 수 없습니다.")
+
+    if session.data["status"] != "pending":
+        raise HTTPException(status_code=400, detail="이미 처리된 세션입니다.")
+
+    _verify_leader(db, session.data["team_id"], current_user["id"])
+
+    db.table("ai_schedule_session").update({"status": "rejected"}).eq("id", session_id).execute()
+
+    ai_schedule_reject_total.inc()
+    record = logger.makeRecord("teamteam", logging.INFO, "", 0,
+        f"AI schedule rejected (session={session_id})", (), None)
+    record.extra_data = {"session_id": session_id, "user_id": current_user["id"]}
+    logger.handle(record)
+
+    return {"message": "AI 추천 일정이 기각되었습니다."}

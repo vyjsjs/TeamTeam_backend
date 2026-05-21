@@ -1,6 +1,6 @@
 """Shared dependencies for route handlers."""
 
-from fastapi import Depends, HTTPException, status
+from fastapi import Depends, HTTPException, Request, status
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from app.core.security import decode_access_token
 from app.core.supabase import get_supabase
@@ -9,6 +9,7 @@ security = HTTPBearer()
 
 
 async def get_current_user(
+    request: Request,
     credentials: HTTPAuthorizationCredentials = Depends(security),
 ) -> dict:
     """Extract and validate the current user from the token.
@@ -45,4 +46,6 @@ async def get_current_user(
             detail="사용자를 찾을 수 없습니다.",
         )
 
+    # Expose user_id on request.state so the logging middleware can include it
+    request.state.user_id = result.data["id"]
     return result.data

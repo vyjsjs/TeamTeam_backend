@@ -2,14 +2,22 @@
 
 import json
 import logging
-from fastapi import APIRouter, Depends, HTTPException
+import time
+from fastapi import APIRouter, Depends, HTTPException, Request
 from app.dependencies import get_current_user
 from app.core.supabase import get_supabase
 from app.core.config import get_settings
 from app.schemas.chat import ChatRoomCreateRequest, ChatRoomResponse, ChatMessageResponse, ChatMessageSend, AIPromptResponse
+from app.core.metrics import (
+    ai_chat_summary_latency,
+    ai_chat_external_latency,
+    ai_chat_disconnect_total,
+)
 
 router = APIRouter(tags=["Chat"])
 logger = logging.getLogger("teamteam")
+
+AI_CHAT_WARN_THRESHOLD_S = 5.0
 
 
 def _verify_member(db, team_id: int, user_id: int):
@@ -89,8 +97,10 @@ async def send_message(room_id: int, body: ChatMessageSend, current_user: dict =
 
 
 @router.post("/api/chat-rooms/{room_id}/ai-prompt", response_model=AIPromptResponse)
-async def generate_ai_prompt(room_id: int, current_user: dict = Depends(get_current_user)):
+async def generate_ai_prompt(room_id: int, request: Request, current_user: dict = Depends(get_current_user)):
     """대화 내용 기반 AI 프롬프트/요약 생성."""
+    endpoint_start = time.time()
+
     db = get_supabase()
     membership = db.table("chat_room_member").select("room_id").eq("room_id", room_id).eq("user_id", current_user["id"]).execute()
     if not membership.data:
@@ -108,17 +118,59 @@ async def generate_ai_prompt(room_id: int, current_user: dict = Depends(get_curr
 
     settings = get_settings()
     if not settings.GEMINI_API_KEY:
-        # Fallback summary
+        total = time.time() - endpoint_start
+        ai_chat_summary_latency.observe(total)
         return AIPromptResponse(prompt=f"[최근 대화 요약]\n{conversation[:500]}...")
 
     import google.generativeai as genai
     genai.configure(api_key=settings.GEMINI_API_KEY)
-    
+
+    # Client disconnect check before expensive external call
+    if await request.is_disconnected():
+        ai_chat_disconnect_total.inc()
+        logger.warning(
+            "AI chat summary: client disconnected before external API call",
+            extra={"extra_data": {"room_id": room_id, "user_id": current_user["id"]}},
+        )
+        raise HTTPException(status_code=499, detail="클라이언트 연결이 끊겼습니다.")
+
     try:
         model = genai.GenerativeModel("gemini-2.5-flash")
-        prompt = f"다음 팀 프로젝트 채팅 대화를 분석하여 주요 논의 사항, 결정된 내용, 남은 과제를 정리해주세요. 한국어로 답변하세요.\n\n대화내용:\n{conversation}"
-        response = model.generate_content(prompt)
+        prompt_text = f"다음 팀 프로젝트 채팅 대화를 분석하여 주요 논의 사항, 결정된 내용, 남은 과제를 정리해주세요. 한국어로 답변하세요.\n\n대화내용:\n{conversation}"
+
+        ext_start = time.time()
+        response = model.generate_content(prompt_text)
+        ext_latency = time.time() - ext_start
+        ai_chat_external_latency.observe(ext_latency)
+
+        total_latency = time.time() - endpoint_start
+        ai_chat_summary_latency.observe(total_latency)
+
+        log_extra = {
+            "room_id": room_id,
+            "user_id": current_user["id"],
+            "total_latency_ms": round(total_latency * 1000, 2),
+            "external_api_latency_ms": round(ext_latency * 1000, 2),
+        }
+        if total_latency > AI_CHAT_WARN_THRESHOLD_S:
+            record = logger.makeRecord("teamteam", logging.WARNING, "", 0,
+                f"AI chat summary slow: {total_latency:.2f}s (external: {ext_latency:.2f}s)", (), None)
+            record.extra_data = log_extra
+            logger.handle(record)
+        else:
+            record = logger.makeRecord("teamteam", logging.INFO, "", 0,
+                f"AI chat summary latency: {total_latency:.2f}s (external: {ext_latency:.2f}s)", (), None)
+            record.extra_data = log_extra
+            logger.handle(record)
+
+        # Post-response disconnect check — count wasted AI calls
+        if await request.is_disconnected():
+            ai_chat_disconnect_total.inc()
+            logger.warning(f"AI chat summary: client disconnected after response (room_id={room_id})")
+
         return AIPromptResponse(prompt=response.text)
     except Exception as e:
-        logger.error(f"AI prompt generation failed: {e}")
+        total_latency = time.time() - endpoint_start
+        ai_chat_summary_latency.observe(total_latency)
+        logger.error(f"AI prompt generation failed after {total_latency:.2f}s: {e}")
         raise HTTPException(status_code=502, detail=f"AI 프롬프트 생성에 실패했습니다: {str(e)}")

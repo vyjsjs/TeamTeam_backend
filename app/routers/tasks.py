@@ -1,12 +1,19 @@
 """Task management routes."""
 
+import logging
+import time
 from datetime import datetime, timezone
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from app.dependencies import get_current_user
 from app.core.supabase import get_supabase
 from app.schemas.task import TaskCreateRequest, TaskUpdateRequest, TaskResponse
+from app.core.metrics import task_list_mine_latency, task_list_mine_total
 
 router = APIRouter(tags=["Tasks"])
+logger = logging.getLogger("teamteam")
+
+TASK_LIST_WARN_MS = 500
+TASK_LIST_CRITICAL_MS = 1000
 
 
 def _verify_team_member(db, team_id: int, user_id: int):
@@ -36,7 +43,25 @@ async def list_tasks(
     if mine_only:
         query = query.eq("assignee_id", current_user["id"])
 
+    query_start = time.time()
     tasks = query.order("due_date").execute()
+    query_ms = round((time.time() - query_start) * 1000, 2)
+
+    if mine_only:
+        task_list_mine_latency.observe(query_ms / 1000)
+        task_list_mine_total.inc()
+
+        log_extra = {"user_id": current_user["id"], "team_id": team_id, "query_latency_ms": query_ms}
+        if query_ms >= TASK_LIST_CRITICAL_MS:
+            record = logger.makeRecord("teamteam", logging.CRITICAL, "", 0,
+                f"Personal task list CRITICAL latency: {query_ms}ms", (), None)
+            record.extra_data = log_extra
+            logger.handle(record)
+        elif query_ms >= TASK_LIST_WARN_MS:
+            record = logger.makeRecord("teamteam", logging.WARNING, "", 0,
+                f"Personal task list slow: {query_ms}ms", (), None)
+            record.extra_data = log_extra
+            logger.handle(record)
 
     result = []
     for t in tasks.data or []:
