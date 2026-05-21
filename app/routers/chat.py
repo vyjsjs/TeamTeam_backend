@@ -1,17 +1,22 @@
-"""Chat routes: rooms, messages, AI prompt generation."""
+"""Chat routes: rooms, messages, AI prompt generation, real-time WebSocket."""
 
 import json
 import logging
 import time
-from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi import APIRouter, Depends, HTTPException, Request, WebSocket, WebSocketDisconnect, Query
 from app.dependencies import get_current_user
 from app.core.supabase import get_supabase
 from app.core.config import get_settings
+from app.core.security import decode_access_token
+from app.core.websocket_manager import manager as ws_manager
 from app.schemas.chat import ChatRoomCreateRequest, ChatRoomResponse, ChatMessageResponse, ChatMessageSend, AIPromptResponse
 from app.core.metrics import (
     ai_chat_summary_latency,
     ai_chat_external_latency,
     ai_chat_disconnect_total,
+    ws_active_connections,
+    ws_connections_total,
+    ws_messages_received_total,
 )
 
 router = APIRouter(tags=["Chat"])
@@ -174,3 +179,110 @@ async def generate_ai_prompt(room_id: int, request: Request, current_user: dict 
         ai_chat_summary_latency.observe(total_latency)
         logger.error(f"AI prompt generation failed after {total_latency:.2f}s: {e}")
         raise HTTPException(status_code=502, detail=f"AI 프롬프트 생성에 실패했습니다: {str(e)}")
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# WebSocket — 실시간 채팅
+# ──────────────────────────────────────────────────────────────────────────────
+
+@router.websocket("/ws/chat-rooms/{room_id}")
+async def websocket_chat(
+    room_id: int,
+    websocket: WebSocket,
+    user_id: int = Query(..., description="사용자 ID (현재 JWT 인증 없이 직접 ID를 받음)"),
+):
+    """실시간 채팅 WebSocket 엔드포인트.
+
+    연결 URL 예시:
+        ws://<host>/ws/chat-rooms/{room_id}?user_id=<user_id>
+
+    클라이언트 → 서버 메시지 형식 (JSON):
+        {"message_content": "안녕하세요"}
+
+    서버 → 클라이언트 브로드캐스트 형식 (JSON):
+        {
+            "id": 1,
+            "room_id": 42,
+            "sender_id": 7,
+            "sender_name": "홍길동",
+            "message_content": "안녕하세요",
+            "created_at": "2026-05-21T14:00:00"
+        }
+
+    서버 → 클라이언트 에러 형식 (JSON):
+        {"error": "메시지 내용이 없습니다."}
+    """
+
+    # 2. DB에서 사용자 조회 및 채팅방 멤버십 확인
+    db = get_supabase()
+
+    user_row = db.table("user").select("id, name").eq("id", user_id).single().execute()
+    if not user_row.data:
+        await websocket.close(code=4003, reason="사용자를 찾을 수 없습니다.")
+        return
+    user_name: str = user_row.data.get("name", "")
+
+    membership = (
+        db.table("chat_room_member")
+        .select("room_id")
+        .eq("room_id", room_id)
+        .eq("user_id", user_id)
+        .execute()
+    )
+    if not membership.data:
+        await websocket.close(code=4003, reason="채팅방 멤버가 아닙니다.")
+        return
+
+    # 3. 연결 수락 및 메트릭 업데이트
+    await ws_manager.connect(room_id, user_id, websocket)
+    ws_connections_total.labels(room_id=room_id).inc()
+    ws_active_connections.labels(room_id=room_id).set(ws_manager.active_count(room_id))
+
+    try:
+        while True:
+            # 4. 클라이언트로부터 메시지 수신
+            raw = await websocket.receive_text()
+            try:
+                data = json.loads(raw)
+            except json.JSONDecodeError:
+                await websocket.send_json({"error": "JSON 형식이 올바르지 않습니다."})
+                continue
+
+            content: str = (data.get("message_content") or "").strip()
+            if not content:
+                await websocket.send_json({"error": "메시지 내용이 없습니다."})
+                continue
+
+            ws_messages_received_total.labels(room_id=room_id).inc()
+
+            # 5. DB에 메시지 저장
+            msg_row = db.table("chat_message").insert({
+                "room_id": room_id,
+                "sender_id": user_id,
+                "message_content": content,
+            }).execute()
+
+            if not msg_row.data:
+                await websocket.send_json({"error": "메시지 저장에 실패했습니다."})
+                continue
+
+            m = msg_row.data[0]
+            broadcast_payload = {
+                "id": m["id"],
+                "room_id": m["room_id"],
+                "sender_id": m["sender_id"],
+                "sender_name": user_name,
+                "message_content": m["message_content"],
+                "created_at": str(m.get("created_at", "")),
+            }
+
+            # 6. 발신자 포함 전체 브로드캐스트
+            await ws_manager.broadcast(room_id, broadcast_payload)
+
+    except WebSocketDisconnect:
+        logger.info(f"WebSocket disconnected normally: room_id={room_id}, user_id={user_id}")
+    except Exception as e:
+        logger.error(f"WebSocket error: room_id={room_id}, user_id={user_id}, error={e}")
+    finally:
+        ws_manager.disconnect(room_id, user_id)
+        ws_active_connections.labels(room_id=room_id).set(ws_manager.active_count(room_id))

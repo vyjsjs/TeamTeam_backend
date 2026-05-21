@@ -68,3 +68,22 @@ http_errors_total = Counter(
     "HTTP errors by endpoint, status code, and error type",
     ["endpoint", "status_code", "error_type"],
 )
+
+# ── 8. 웹소켓 채팅 메트릭 ──────────────────────────────────────────────────────
+from prometheus_client import Gauge  # noqa: E402
+
+ws_active_connections = Gauge(
+    "ws_chat_active_connections",
+    "Currently active WebSocket connections per chat room",
+    ["room_id"],
+)
+ws_connections_total = Counter(
+    "ws_chat_connections_total",
+    "Total WebSocket connections accepted (per room)",
+    ["room_id"],
+)
+ws_messages_received_total = Counter(
+    "ws_chat_messages_received_total",
+    "Total messages received over WebSocket (per room)",
+    ["room_id"],
+)
