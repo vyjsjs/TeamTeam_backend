@@ -1,0 +1,83 @@
+groups:
+  - name: teamteam-alerts
+    rules:
+
+      # AI 채팅 요약 5초 초과 비율
+      - alert: AIChatSummarySlow
+        expr: |
+          histogram_quantile(0.95,
+            rate(ai_chat_summary_latency_seconds_bucket[5m])
+          ) > 5
+        for: 2m
+        labels:
+          severity: warning
+        annotations:
+          summary: "AI 채팅 요약 p95 응답 시간 5초 초과"
+          description: "최근 5분 기준 p95 레이턴시: {{ $value | humanizeDuration }}"
+
+      # AI 일정 추천 5초 초과 비율
+      - alert: AIScheduleSlow
+        expr: |
+          histogram_quantile(0.95,
+            rate(ai_schedule_latency_seconds_bucket[5m])
+          ) > 5
+        for: 2m
+        labels:
+          severity: warning
+        annotations:
+          summary: "AI 일정 추천 p95 응답 시간 5초 초과"
+          description: "최근 5분 기준 p95 레이턴시: {{ $value | humanizeDuration }}"
+
+      # AI 일정 추천 실패 급증
+      - alert: AIScheduleFailureSpike
+        expr: rate(ai_schedule_failure_total[5m]) > 0.1
+        for: 1m
+        labels:
+          severity: critical
+        annotations:
+          summary: "AI 일정 추천 실패 급증"
+          description: "분당 실패율: {{ $value | humanize }}"
+
+      # 평가 제출 실패 (1건이라도 발생 시 즉시)
+      - alert: EvaluationSubmitFailure
+        expr: increase(evaluation_submit_total{status="failure"}[5m]) > 0
+        for: 0m
+        labels:
+          severity: critical
+        annotations:
+          summary: "동료 평가 제출 실패 감지"
+          description: "error_type={{ $labels.error_type }}, 5분 내 실패 건수: {{ $value }}"
+
+      # 개인 투두 조회 1초 초과
+      - alert: TaskListCriticalLatency
+        expr: |
+          histogram_quantile(0.99,
+            rate(task_list_mine_latency_seconds_bucket[5m])
+          ) > 1
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: "개인 투두 조회 p99 응답 시간 1초 초과"
+          description: "p99 레이턴시: {{ $value | humanizeDuration }}"
+
+      # 서버 에러율 급증
+      - alert: ServerErrorSpike
+        expr: |
+          rate(http_requests_errors_total{status_code=~"5.."}[5m]) > 0.5
+        for: 1m
+        labels:
+          severity: critical
+        annotations:
+          summary: "서버 5xx 에러 급증"
+          description: "endpoint={{ $labels.endpoint }}, 분당 에러율: {{ $value | humanize }}"
+
+      # 클라이언트 이탈 급증
+      - alert: AIChatDisconnectSpike
+        expr: rate(ai_chat_client_disconnect_total[5m]) > 0.2
+        for: 2m
+        labels:
+          severity: warning
+        annotations:
+          summary: "AI 채팅 요약 중 클라이언트 이탈 급증"
+          description: "분당 이탈률: {{ $value | humanize }}"

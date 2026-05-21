@@ -1,0 +1,216 @@
+{
+  "title": "TeamTeam Backend",
+  "uid": "teamteam-main",
+  "schemaVersion": 38,
+  "refresh": "30s",
+  "time": { "from": "now-1h", "to": "now" },
+  "panels": [
+    {
+      "id": 1,
+      "title": "AI 채팅 요약 — 응답 시간 (p50 / p95 / p99)",
+      "type": "timeseries",
+      "gridPos": { "x": 0, "y": 0, "w": 12, "h": 8 },
+      "targets": [
+        {
+          "expr": "histogram_quantile(0.50, rate(ai_chat_summary_latency_seconds_bucket[5m]))",
+          "legendFormat": "p50"
+        },
+        {
+          "expr": "histogram_quantile(0.95, rate(ai_chat_summary_latency_seconds_bucket[5m]))",
+          "legendFormat": "p95"
+        },
+        {
+          "expr": "histogram_quantile(0.99, rate(ai_chat_summary_latency_seconds_bucket[5m]))",
+          "legendFormat": "p99"
+        },
+        {
+          "expr": "histogram_quantile(0.95, rate(ai_chat_external_api_latency_seconds_bucket[5m]))",
+          "legendFormat": "외부 AI API p95"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s",
+          "thresholds": {
+            "steps": [
+              { "color": "green", "value": null },
+              { "color": "yellow", "value": 3 },
+              { "color": "red", "value": 5 }
+            ]
+          }
+        }
+      }
+    },
+    {
+      "id": 2,
+      "title": "AI 채팅 — 클라이언트 이탈 수",
+      "type": "timeseries",
+      "gridPos": { "x": 12, "y": 0, "w": 12, "h": 8 },
+      "targets": [
+        {
+          "expr": "increase(ai_chat_client_disconnect_total[5m])",
+          "legendFormat": "이탈 건수 (5분)"
+        }
+      ],
+      "fieldConfig": { "defaults": { "unit": "short", "color": { "mode": "fixed", "fixedColor": "orange" } } }
+    },
+    {
+      "id": 3,
+      "title": "AI 일정 추천 — 응답 시간 (p50 / p95 / p99)",
+      "type": "timeseries",
+      "gridPos": { "x": 0, "y": 8, "w": 12, "h": 8 },
+      "targets": [
+        {
+          "expr": "histogram_quantile(0.50, rate(ai_schedule_latency_seconds_bucket[5m]))",
+          "legendFormat": "p50"
+        },
+        {
+          "expr": "histogram_quantile(0.95, rate(ai_schedule_latency_seconds_bucket[5m]))",
+          "legendFormat": "p95"
+        },
+        {
+          "expr": "histogram_quantile(0.99, rate(ai_schedule_latency_seconds_bucket[5m]))",
+          "legendFormat": "p99"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s",
+          "thresholds": {
+            "steps": [
+              { "color": "green", "value": null },
+              { "color": "yellow", "value": 3 },
+              { "color": "red", "value": 5 }
+            ]
+          }
+        }
+      }
+    },
+    {
+      "id": 4,
+      "title": "AI 일정 — 수용 / 기각 / 수동수정",
+      "type": "timeseries",
+      "gridPos": { "x": 12, "y": 8, "w": 12, "h": 8 },
+      "targets": [
+        {
+          "expr": "increase(ai_schedule_accept_total[1h])",
+          "legendFormat": "수용"
+        },
+        {
+          "expr": "increase(ai_schedule_reject_total[1h])",
+          "legendFormat": "기각"
+        },
+        {
+          "expr": "increase(ai_schedule_task_modify_total[1h])",
+          "legendFormat": "수동 수정 건수"
+        }
+      ],
+      "fieldConfig": { "defaults": { "unit": "short" } }
+    },
+    {
+      "id": 5,
+      "title": "개인 투두 조회 — 응답 시간 (p95 / p99)",
+      "type": "timeseries",
+      "gridPos": { "x": 0, "y": 16, "w": 12, "h": 8 },
+      "targets": [
+        {
+          "expr": "histogram_quantile(0.95, rate(task_list_mine_latency_seconds_bucket[5m]))",
+          "legendFormat": "p95"
+        },
+        {
+          "expr": "histogram_quantile(0.99, rate(task_list_mine_latency_seconds_bucket[5m]))",
+          "legendFormat": "p99"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s",
+          "thresholds": {
+            "steps": [
+              { "color": "green", "value": null },
+              { "color": "yellow", "value": 0.5 },
+              { "color": "red", "value": 1 }
+            ]
+          }
+        }
+      }
+    },
+    {
+      "id": 6,
+      "title": "개인 투두 진입 빈도 (DAU proxy)",
+      "type": "timeseries",
+      "gridPos": { "x": 12, "y": 16, "w": 12, "h": 8 },
+      "targets": [
+        {
+          "expr": "increase(task_list_mine_requests_total[1h])",
+          "legendFormat": "시간당 진입 수"
+        }
+      ],
+      "fieldConfig": { "defaults": { "unit": "short" } }
+    },
+    {
+      "id": 7,
+      "title": "동료 평가 제출 — 성공 / 실패 (원인별)",
+      "type": "timeseries",
+      "gridPos": { "x": 0, "y": 24, "w": 12, "h": 8 },
+      "targets": [
+        {
+          "expr": "increase(evaluation_submit_total{status=\"success\"}[1h])",
+          "legendFormat": "성공"
+        },
+        {
+          "expr": "increase(evaluation_submit_total{status=\"failure\", error_type=\"db_error\"}[1h])",
+          "legendFormat": "실패 - DB 오류"
+        },
+        {
+          "expr": "increase(evaluation_submit_total{status=\"failure\", error_type=\"duplicate\"}[1h])",
+          "legendFormat": "실패 - 중복"
+        },
+        {
+          "expr": "increase(evaluation_submit_total{status=\"failure\", error_type=\"db_empty_response\"}[1h])",
+          "legendFormat": "실패 - DB 응답 없음"
+        }
+      ],
+      "fieldConfig": { "defaults": { "unit": "short" } }
+    },
+    {
+      "id": 8,
+      "title": "글로벌 에러 — 엔드포인트별 5xx 에러율",
+      "type": "timeseries",
+      "gridPos": { "x": 12, "y": 24, "w": 12, "h": 8 },
+      "targets": [
+        {
+          "expr": "topk(5, rate(http_requests_errors_total{status_code=~\"5..\"}[5m]))",
+          "legendFormat": "{{ endpoint }}"
+        }
+      ],
+      "fieldConfig": { "defaults": { "unit": "reqps" } }
+    },
+    {
+      "id": 9,
+      "title": "AI 일정 추천 실패 — 에러 타입별",
+      "type": "timeseries",
+      "gridPos": { "x": 0, "y": 32, "w": 12, "h": 8 },
+      "targets": [
+        {
+          "expr": "rate(ai_schedule_failure_total[5m])",
+          "legendFormat": "{{ error_type }}"
+        }
+      ],
+      "fieldConfig": { "defaults": { "unit": "reqps", "color": { "mode": "fixed", "fixedColor": "red" } } }
+    },
+    {
+      "id": 10,
+      "title": "전체 HTTP 요청 처리 시간 (p95)",
+      "type": "timeseries",
+      "gridPos": { "x": 12, "y": 32, "w": 12, "h": 8 },
+      "targets": [
+        {
+          "expr": "histogram_quantile(0.95, rate(http_request_duration_seconds_bucket[5m]))",
+          "legendFormat": "전체 p95"
+        }
+      ],
+      "fieldConfig": { "defaults": { "unit": "s" } }
+    }
+  ]
+}

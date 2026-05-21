@@ -219,3 +219,6 @@ __marimo__/
 
 # EC2
 .pem
+
+# Claude Code
+.claude/
