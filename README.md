@@ -7,7 +7,7 @@
 - **Framework**: Python 3.12 / FastAPI
 - **Database**: Supabase (PostgreSQL)
 - **Authentication**: Simple ID-based Auth (데모용)
-- **AI**: Gemini API (gemini-2.5-flash) — 일정 추천 & 채팅 요약
+- **AI**: Gemini API (gemini-2.0-flash) — 일정 추천 & 채팅 요약
 - **Monitoring**: Prometheus + 구조화 JSON 로깅
 - **Deployment**: Docker + Docker Compose → AWS EC2
 

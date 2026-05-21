@@ -135,7 +135,7 @@ async def generate_ai_prompt(room_id: int, request: Request, current_user: dict 
         raise HTTPException(status_code=499, detail="클라이언트 연결이 끊겼습니다.")
 
     try:
-        model = genai.GenerativeModel("gemini-2.5-flash")
+        model = genai.GenerativeModel("gemini-2.0-flash")
         prompt_text = f"다음 팀 프로젝트 채팅 대화를 분석하여 주요 논의 사항, 결정된 내용, 남은 과제를 정리해주세요. 한국어로 답변하세요.\n\n대화내용:\n{conversation}"
 
         ext_start = time.time()
