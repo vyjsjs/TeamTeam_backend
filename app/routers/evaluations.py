@@ -1,11 +1,14 @@
 """Evaluation (peer review) routes."""
 
+import logging
 from fastapi import APIRouter, Depends, HTTPException
 from app.dependencies import get_current_user
 from app.core.supabase import get_supabase
 from app.schemas.evaluation import EvaluationCreateRequest, EvaluationResponse, EvalStatusItem
+from app.core.metrics import evaluation_submit_total
 
 router = APIRouter(tags=["Evaluations"])
+logger = logging.getLogger("teamteam")
 
 
 def _verify_member(db, team_id: int, user_id: int):
@@ -21,6 +24,7 @@ async def submit_evaluation(team_id: int, body: EvaluationCreateRequest, current
     _verify_member(db, team_id, current_user["id"])
 
     if body.evaluatee_id == current_user["id"]:
+        evaluation_submit_total.labels(status="failure", error_type="self_evaluation").inc()
         raise HTTPException(status_code=400, detail="자기 자신을 평가할 수 없습니다.")
 
     # Check evaluatee is also a member
@@ -29,6 +33,7 @@ async def submit_evaluation(team_id: int, body: EvaluationCreateRequest, current
     # Check for duplicate
     existing = db.table("evaluation").select("id").eq("team_id", team_id).eq("evaluator_id", current_user["id"]).eq("evaluatee_id", body.evaluatee_id).execute()
     if existing.data:
+        evaluation_submit_total.labels(status="failure", error_type="duplicate").inc()
         raise HTTPException(status_code=409, detail="이미 해당 팀원을 평가했습니다.")
 
     eval_data = {
@@ -43,10 +48,25 @@ async def submit_evaluation(team_id: int, body: EvaluationCreateRequest, current
         "comment": body.comment,
     }
 
-    result = db.table("evaluation").insert(eval_data).execute()
-    if not result.data:
+    try:
+        result = db.table("evaluation").insert(eval_data).execute()
+    except Exception as e:
+        evaluation_submit_total.labels(status="failure", error_type="db_error").inc()
+        record = logger.makeRecord("teamteam", logging.ERROR, "", 0,
+            f"Evaluation DB insert failed (evaluator={current_user['id']}, evaluatee={body.evaluatee_id}): {e}", (), None)
+        record.extra_data = {"team_id": team_id, "evaluator_id": current_user["id"], "evaluatee_id": body.evaluatee_id}
+        logger.handle(record)
         raise HTTPException(status_code=500, detail="평가 제출에 실패했습니다.")
 
+    if not result.data:
+        evaluation_submit_total.labels(status="failure", error_type="db_empty_response").inc()
+        record = logger.makeRecord("teamteam", logging.ERROR, "", 0,
+            f"Evaluation insert returned no data (evaluator={current_user['id']}, evaluatee={body.evaluatee_id})", (), None)
+        record.extra_data = {"team_id": team_id, "evaluator_id": current_user["id"], "evaluatee_id": body.evaluatee_id}
+        logger.handle(record)
+        raise HTTPException(status_code=500, detail="평가 제출에 실패했습니다.")
+
+    evaluation_submit_total.labels(status="success", error_type="none").inc()
     return EvaluationResponse(**result.data[0])
 
 
